@@ -1,141 +1,313 @@
 """
 PDF Editor — Join PDF and image files into a single PDF.
+Modern PySide6 interface.
 """
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, Listbox
+import sys
 from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QPushButton,
+    QLineEdit,
+    QGroupBox,
+    QFileDialog,
+    QMessageBox,
+)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 
 from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
 
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
 
 
-def get_file_types() -> list[tuple[str, str]]:
-    return [
-        ("PDF and images", " ".join(f"*{e}" for e in sorted(ALLOWED_EXTENSIONS))),
-        ("PDF files", "*.pdf"),
-        ("JPEG files", "*.jpg *.jpeg"),
-        ("PNG files", "*.png"),
-        ("All supported", "*.pdf *.jpg *.jpeg *.png"),
-    ]
+def get_file_filter() -> str:
+    exts = " ".join(f"*{e}" for e in sorted(ALLOWED_EXTENSIONS))
+    return f"PDF and images ({exts});;PDF files (*.pdf);;JPEG files (*.jpg *.jpeg);;PNG files (*.png);;All supported (*.pdf *.jpg *.jpeg *.png)"
 
 
-class PdfEditorApp:
+class PdfEditorApp(QMainWindow):
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("PDF Editor — Join PDFs & Images")
-        self.root.minsize(480, 420)
-        self.root.geometry("560x480")
-
+        super().__init__()
         self.file_list: list[str] = []
-        self.output_folder = tk.StringVar(value="")
-        self.output_filename = tk.StringVar(value="merged.pdf")
-
         self._build_ui()
+        self._apply_styles()
 
     def _build_ui(self) -> None:
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill=tk.BOTH, expand=True)
+        self.setWindowTitle("PDF Editor — Join PDFs & Images")
+        self.setMinimumSize(520, 480)
+        self.resize(600, 520)
+        self.setAcceptDrops(True)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
 
         # Files section
-        ttk.Label(main, text="Files to join (PDF, JPEG, PNG):").pack(anchor=tk.W)
-        list_frame = ttk.Frame(main)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        scrollbar = ttk.Scrollbar(list_frame)
-        self.listbox = Listbox(
-            list_frame,
-            height=8,
-            selectmode=tk.EXTENDED,
-            yscrollcommand=scrollbar.set,
-            font=("Segoe UI", 10),
-        )
-        scrollbar.config(command=self.listbox.yview)
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        files_label = QLabel("Files to join (PDF, JPEG, PNG)")
+        files_label.setObjectName("sectionLabel")
+        layout.addWidget(files_label)
 
-        btn_frame = ttk.Frame(main)
-        btn_frame.pack(fill=tk.X, pady=6)
-        ttk.Button(btn_frame, text="Add files…", command=self._add_files).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Remove selected", command=self._remove_selected).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btn_frame, text="Clear all", command=self._clear_list).pack(side=tk.LEFT)
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list_widget.setMinimumHeight(160)
+        self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        layout.addWidget(self.list_widget)
 
-        # Output path
-        out_frame = ttk.LabelFrame(main, text="Output", padding=8)
-        out_frame.pack(fill=tk.X, pady=(12, 0))
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
 
-        row1 = ttk.Frame(out_frame)
-        row1.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(row1, text="Folder:").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Entry(row1, textvariable=self.output_folder, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        ttk.Button(row1, text="Browse…", command=self._choose_output_folder).pack(side=tk.LEFT)
+        self.btn_add = QPushButton("Add files…")
+        self.btn_add.setObjectName("primaryButton")
+        self.btn_add.clicked.connect(self._add_files)
 
-        row2 = ttk.Frame(out_frame)
-        row2.pack(fill=tk.X)
-        ttk.Label(row2, text="File name:").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Entry(row2, textvariable=self.output_filename, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_remove = QPushButton("Remove selected")
+        self.btn_remove.clicked.connect(self._remove_selected)
+
+        self.btn_clear = QPushButton("Clear all")
+        self.btn_clear.clicked.connect(self._clear_list)
+
+        btn_row.addWidget(self.btn_add)
+        btn_row.addWidget(self.btn_remove)
+        btn_row.addWidget(self.btn_clear)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # Output section
+        output_group = QGroupBox("Output")
+        output_group.setObjectName("outputGroup")
+        output_layout = QVBoxLayout(output_group)
+        output_layout.setSpacing(12)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("Folder:"))
+        self.folder_edit = QLineEdit()
+        self.folder_edit.setPlaceholderText("Select output folder…")
+        folder_row.addWidget(self.folder_edit)
+
+        self.btn_browse = QPushButton("Browse…")
+        self.btn_browse.clicked.connect(self._choose_output_folder)
+        folder_row.addWidget(self.btn_browse)
+        output_layout.addLayout(folder_row)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("File name:"))
+        self.filename_edit = QLineEdit()
+        self.filename_edit.setPlaceholderText("merged.pdf")
+        self.filename_edit.setText("merged.pdf")
+        name_row.addWidget(self.filename_edit)
+        output_layout.addLayout(name_row)
+
+        layout.addWidget(output_group)
 
         # Merge button
-        ttk.Button(main, text="Merge to PDF", command=self._merge).pack(pady=16)
+        self.btn_merge = QPushButton("Merge to PDF")
+        self.btn_merge.setObjectName("mergeButton")
+        self.btn_merge.setMinimumHeight(44)
+        self.btn_merge.clicked.connect(self._merge)
+        layout.addWidget(self.btn_merge)
+
+        layout.addStretch()
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e2e;
+            }
+            QWidget {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QLabel {
+                color: #cdd6f4;
+            }
+            QLabel#sectionLabel {
+                font-size: 13px;
+                font-weight: 600;
+                color: #89b4fa;
+            }
+            QListWidget {
+                background-color: #313244;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                padding: 8px;
+                color: #cdd6f4;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 6px 10px;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #45475a;
+                color: #89b4fa;
+            }
+            QListWidget::item:hover {
+                background-color: #45475a;
+            }
+            QGroupBox {
+                font-weight: 600;
+                color: #89b4fa;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 16px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 12px;
+                padding: 0 8px;
+                background-color: #1e1e2e;
+            }
+            QLineEdit {
+                background-color: #313244;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                padding: 8px 12px;
+                color: #cdd6f4;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #89b4fa;
+            }
+            QPushButton {
+                background-color: #45475a;
+                color: #cdd6f4;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 18px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #585b70;
+            }
+            QPushButton:pressed {
+                background-color: #313244;
+            }
+            QPushButton#primaryButton {
+                background-color: #89b4fa;
+                color: #1e1e2e;
+            }
+            QPushButton#primaryButton:hover {
+                background-color: #b4befe;
+            }
+            QPushButton#mergeButton {
+                background-color: #a6e3a1;
+                color: #1e1e2e;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QPushButton#mergeButton:hover {
+                background-color: #94e2d5;
+            }
+        """)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path and path not in self.file_list:
+                suffix = Path(path).suffix.lower()
+                if suffix in ALLOWED_EXTENSIONS:
+                    self.file_list.append(path)
+                    self.list_widget.addItem(Path(path).name)
+        event.acceptProposedAction()
 
     def _add_files(self) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Select PDF or image files",
-            filetypes=get_file_types(),
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select PDF or image files",
+            "",
+            get_file_filter(),
         )
         for p in paths:
             if p and p not in self.file_list:
                 self.file_list.append(p)
-                self.listbox.insert(tk.END, Path(p).name)
+                self.list_widget.addItem(Path(p).name)
 
     def _remove_selected(self) -> None:
-        indices = list(self.listbox.curselection())
-        for i in reversed(indices):
-            self.listbox.delete(i)
+        indices = [i.row() for i in self.list_widget.selectedIndexes()]
+        for i in sorted(indices, reverse=True):
+            self.list_widget.takeItem(i)
             del self.file_list[i]
 
     def _clear_list(self) -> None:
-        self.listbox.delete(0, tk.END)
+        self.list_widget.clear()
         self.file_list.clear()
 
     def _choose_output_folder(self) -> None:
-        path = filedialog.askdirectory(title="Select output folder")
+        path = QFileDialog.getExistingDirectory(self, "Select output folder")
         if path:
-            self.output_folder.set(path)
+            self.folder_edit.setText(path)
 
     def _merge(self) -> None:
         if not self.file_list:
-            messagebox.showwarning("No files", "Add at least one file to join.")
+            QMessageBox.warning(
+                self,
+                "No files",
+                "Add at least one file to join.",
+            )
             return
-        folder = self.output_folder.get().strip()
+        folder = self.folder_edit.text().strip()
         if not folder:
-            messagebox.showwarning("No folder", "Choose an output folder.")
+            QMessageBox.warning(
+                self,
+                "No folder",
+                "Choose an output folder.",
+            )
             return
-        name = self.output_filename.get().strip()
+        name = self.filename_edit.text().strip()
         if not name:
-            messagebox.showwarning("No file name", "Enter an output file name.")
+            QMessageBox.warning(
+                self,
+                "No file name",
+                "Enter an output file name.",
+            )
             return
         if not name.lower().endswith(".pdf"):
             name += ".pdf"
         out_path = Path(folder) / name
         try:
             merge_files_to_pdf([Path(p) for p in self.file_list], out_path)
-            messagebox.showinfo("Done", f"Saved to:\n{out_path}")
+            QMessageBox.information(
+                self,
+                "Done",
+                f"Saved to:\n{out_path}",
+            )
         except FileNotFoundError as e:
-            messagebox.showerror("File error", str(e))
+            QMessageBox.critical(self, "File error", str(e))
         except ValueError as e:
-            messagebox.showerror("Error", str(e))
+            QMessageBox.critical(self, "Error", str(e))
         except Exception as e:
-            messagebox.showerror("Error", f"Merge failed:\n{e}")
-
-    def run(self) -> None:
-        self.root.mainloop()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Merge failed:\n{e}",
+            )
 
 
 def main() -> None:
-    app = PdfEditorApp()
-    app.run()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    font = QFont("Segoe UI", 10)
+    app.setFont(font)
+    window = PdfEditorApp()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
