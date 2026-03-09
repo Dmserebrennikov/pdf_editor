@@ -25,9 +25,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPixmap, QImage
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QImage
 
 from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
+from styles import apply_app_style
 
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
 
@@ -140,7 +141,6 @@ class PdfEditorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self._build_ui()
-        self._apply_styles()
 
     def _build_ui(self) -> None:
         self.setWindowTitle("PDF Editor — Join PDFs & Images")
@@ -221,107 +221,6 @@ class PdfEditorApp(QMainWindow):
         layout.addWidget(self.btn_merge)
 
         layout.addStretch()
-
-    def _apply_styles(self) -> None:
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e2e;
-            }
-            QWidget {
-                background-color: #1e1e2e;
-                color: #cdd6f4;
-            }
-            QLabel {
-                color: #cdd6f4;
-            }
-            QLabel#sectionLabel {
-                font-size: 13px;
-                font-weight: 600;
-                color: #89b4fa;
-            }
-            QListWidget {
-                background-color: #313244;
-                border: 1px solid #45475a;
-                border-radius: 8px;
-                padding: 8px;
-                color: #cdd6f4;
-                font-size: 12px;
-            }
-            QListWidget::item {
-                padding: 8px 12px;
-                border-radius: 4px;
-            }
-            QListWidget::item:selected {
-                background-color: #45475a;
-                color: #89b4fa;
-            }
-            QListWidget::item:hover {
-                background-color: #45475a;
-            }
-            QGroupBox {
-                font-weight: 600;
-                color: #89b4fa;
-                border: 1px solid #45475a;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 16px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 12px;
-                padding: 0 8px;
-                background-color: #1e1e2e;
-            }
-            QLineEdit {
-                background-color: #313244;
-                border: 1px solid #45475a;
-                border-radius: 6px;
-                padding: 8px 12px;
-                color: #cdd6f4;
-                font-size: 12px;
-            }
-            QLineEdit:focus {
-                border-color: #89b4fa;
-            }
-            QPushButton {
-                background-color: #45475a;
-                color: #cdd6f4;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 18px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #585b70;
-            }
-            QPushButton:pressed {
-                background-color: #313244;
-            }
-            QPushButton#primaryButton {
-                background-color: #89b4fa;
-                color: #1e1e2e;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #b4befe;
-            }
-            QPushButton#mergeButton {
-                background-color: #a6e3a1;
-                color: #1e1e2e;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            QPushButton#mergeButton:hover {
-                background-color: #94e2d5;
-            }
-            QPushButton#rotateButton {
-                padding: 4px;
-                font-size: 16px;
-            }
-            QLabel#fileRowName {
-                color: #cdd6f4;
-            }
-        """)
 
     def _get_file_list(self) -> list[tuple[str, int]]:
         """Return (path, rotation) tuples in current widget order."""
@@ -451,9 +350,7 @@ class PdfEditorApp(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    font = QFont("Segoe UI", 10)
-    app.setFont(font)
+    apply_app_style(app)
     window = PdfEditorApp()
     window.show()
     sys.exit(app.exec())
