@@ -4,9 +4,11 @@ Modern PySide6 interface.
 """
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
+from PIL import Image
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -15,18 +17,71 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QLineEdit,
     QGroupBox,
     QFileDialog,
     QMessageBox,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPixmap, QImage
 
 from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
 
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
+
+THUMBNAIL_SIZE = 48
+
+
+def _thumbnail_for_image(path: Path) -> QPixmap | None:
+    """Generate a thumbnail from an image file."""
+    try:
+        img = Image.open(path)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.thumbnail((THUMBNAIL_SIZE * 2, THUMBNAIL_SIZE * 2), Image.Resampling.LANCZOS)
+        data = img.tobytes("raw", "RGB")
+        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg).scaled(
+            THUMBNAIL_SIZE, THUMBNAIL_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+    except Exception:
+        return None
+
+
+def _thumbnail_for_pdf(path: Path) -> QPixmap | None:
+    """Generate a thumbnail from the first page of a PDF."""
+    try:
+        import fitz
+        doc = fitz.open(path)
+        if len(doc) == 0:
+            doc.close()
+            return None
+        page = doc[0]
+        scale = THUMBNAIL_SIZE / max(page.rect.width, page.rect.height)
+        mat = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        doc.close()
+        data = img.tobytes("raw", "RGB")
+        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg).scaled(
+            THUMBNAIL_SIZE, THUMBNAIL_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+    except Exception:
+        return None
+
+
+def create_file_thumbnail(path: str) -> QPixmap | None:
+    """Create a small thumbnail for a file (image or PDF)."""
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        return _thumbnail_for_image(p)
+    if suffix == PDF_EXTENSION:
+        return _thumbnail_for_pdf(p)
+    return None
 
 
 def get_file_filter() -> str:
@@ -37,7 +92,6 @@ def get_file_filter() -> str:
 class PdfEditorApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.file_list: list[str] = []
         self._build_ui()
         self._apply_styles()
 
@@ -62,6 +116,8 @@ class PdfEditorApp(QMainWindow):
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.setMinimumHeight(160)
         self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.list_widget.setIconSize(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+        self.list_widget.setSpacing(6)
         layout.addWidget(self.list_widget)
 
         btn_row = QHBoxLayout()
@@ -145,7 +201,7 @@ class PdfEditorApp(QMainWindow):
                 font-size: 12px;
             }
             QListWidget::item {
-                padding: 6px 10px;
+                padding: 8px 12px;
                 border-radius: 4px;
             }
             QListWidget::item:selected {
@@ -213,6 +269,27 @@ class PdfEditorApp(QMainWindow):
             }
         """)
 
+    def _get_file_list(self) -> list[str]:
+        """Return file paths in current widget order (for merge, after reorder)."""
+        paths = []
+        for i in range(self.list_widget.count()):
+            path = self.list_widget.item(i).data(Qt.ItemDataRole.UserRole)
+            if path:
+                paths.append(path)
+        return paths
+
+    def _add_file_item(self, path: str) -> None:
+        """Add a file to the list with its thumbnail preview."""
+        existing = self._get_file_list()
+        if path in existing:
+            return
+        item = QListWidgetItem(Path(path).name)
+        item.setData(Qt.ItemDataRole.UserRole, path)
+        thumb = create_file_thumbnail(path)
+        if thumb is not None:
+            item.setIcon(thumb)
+        self.list_widget.addItem(item)
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
@@ -220,11 +297,10 @@ class PdfEditorApp(QMainWindow):
     def dropEvent(self, event: QDropEvent) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path and path not in self.file_list:
+            if path:
                 suffix = Path(path).suffix.lower()
                 if suffix in ALLOWED_EXTENSIONS:
-                    self.file_list.append(path)
-                    self.list_widget.addItem(Path(path).name)
+                    self._add_file_item(path)
         event.acceptProposedAction()
 
     def _add_files(self) -> None:
@@ -235,19 +311,16 @@ class PdfEditorApp(QMainWindow):
             get_file_filter(),
         )
         for p in paths:
-            if p and p not in self.file_list:
-                self.file_list.append(p)
-                self.list_widget.addItem(Path(p).name)
+            if p:
+                self._add_file_item(p)
 
     def _remove_selected(self) -> None:
         indices = [i.row() for i in self.list_widget.selectedIndexes()]
         for i in sorted(indices, reverse=True):
             self.list_widget.takeItem(i)
-            del self.file_list[i]
 
     def _clear_list(self) -> None:
         self.list_widget.clear()
-        self.file_list.clear()
 
     def _choose_output_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select output folder")
@@ -255,7 +328,8 @@ class PdfEditorApp(QMainWindow):
             self.folder_edit.setText(path)
 
     def _merge(self) -> None:
-        if not self.file_list:
+        file_list = self._get_file_list()
+        if not file_list:
             QMessageBox.warning(
                 self,
                 "No files",
@@ -282,7 +356,7 @@ class PdfEditorApp(QMainWindow):
             name += ".pdf"
         out_path = Path(folder) / name
         try:
-            merge_files_to_pdf([Path(p) for p in self.file_list], out_path)
+            merge_files_to_pdf([Path(p) for p in file_list], out_path)
             QMessageBox.information(
                 self,
                 "Done",
