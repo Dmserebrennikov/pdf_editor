@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QPixmap, QImage
 
 from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
@@ -32,14 +32,18 @@ from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
 
 THUMBNAIL_SIZE = 48
+FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
+ROTATION_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
-def _thumbnail_for_image(path: Path) -> QPixmap | None:
+def _thumbnail_for_image(path: Path, rotation: int = 0) -> QPixmap | None:
     """Generate a thumbnail from an image file."""
     try:
         img = Image.open(path)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
+        if rotation:
+            img = img.rotate(-rotation, expand=True)
         img.thumbnail((THUMBNAIL_SIZE * 2, THUMBNAIL_SIZE * 2), Image.Resampling.LANCZOS)
         data = img.tobytes("raw", "RGB")
         qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
@@ -50,7 +54,7 @@ def _thumbnail_for_image(path: Path) -> QPixmap | None:
         return None
 
 
-def _thumbnail_for_pdf(path: Path) -> QPixmap | None:
+def _thumbnail_for_pdf(path: Path, rotation: int = 0) -> QPixmap | None:
     """Generate a thumbnail from the first page of a PDF."""
     try:
         import fitz
@@ -64,6 +68,8 @@ def _thumbnail_for_pdf(path: Path) -> QPixmap | None:
         pix = page.get_pixmap(matrix=mat, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         doc.close()
+        if rotation:
+            img = img.rotate(-rotation, expand=True)
         data = img.tobytes("raw", "RGB")
         qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
         return QPixmap.fromImage(qimg).scaled(
@@ -73,20 +79,61 @@ def _thumbnail_for_pdf(path: Path) -> QPixmap | None:
         return None
 
 
-def create_file_thumbnail(path: str) -> QPixmap | None:
+def create_file_thumbnail(path: str, rotation: int = 0) -> QPixmap | None:
     """Create a small thumbnail for a file (image or PDF)."""
     p = Path(path)
     suffix = p.suffix.lower()
     if suffix in IMAGE_EXTENSIONS:
-        return _thumbnail_for_image(p)
+        return _thumbnail_for_image(p, rotation)
     if suffix == PDF_EXTENSION:
-        return _thumbnail_for_pdf(p)
+        return _thumbnail_for_pdf(p, rotation)
     return None
 
 
 def get_file_filter() -> str:
     exts = " ".join(f"*{e}" for e in sorted(ALLOWED_EXTENSIONS))
     return f"PDF and images ({exts});;PDF files (*.pdf);;JPEG files (*.jpg *.jpeg);;PNG files (*.png);;All supported (*.pdf *.jpg *.jpeg *.png)"
+
+
+class FileRowWidget(QWidget):
+    """A row widget: thumbnail, filename, rotate button."""
+
+    rotateClicked = Signal(str)
+
+    def __init__(self, path: str, thumb: QPixmap | None, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.path = path
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(10)
+
+        self.thumb_label = QLabel()
+        self.thumb_label.setFixedSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if thumb:
+            self.thumb_label.setPixmap(thumb)
+        else:
+            self.thumb_label.setText("?")
+        layout.addWidget(self.thumb_label)
+
+        self.name_label = QLabel(Path(path).name)
+        self.name_label.setObjectName("fileRowName")
+        self.name_label.setMinimumWidth(120)
+        layout.addWidget(self.name_label, 1)
+
+        self.btn_rotate = QPushButton("↻")
+        self.btn_rotate.setObjectName("rotateButton")
+        self.btn_rotate.setFixedSize(32, 32)
+        self.btn_rotate.setToolTip("Rotate 90° clockwise")
+        self.btn_rotate.clicked.connect(lambda: self.rotateClicked.emit(self.path))
+        layout.addWidget(self.btn_rotate)
+
+    def update_thumbnail(self, thumb: QPixmap | None) -> None:
+        if thumb:
+            self.thumb_label.setPixmap(thumb)
+        else:
+            self.thumb_label.clear()
+            self.thumb_label.setText("?")
 
 
 class PdfEditorApp(QMainWindow):
@@ -267,28 +314,54 @@ class PdfEditorApp(QMainWindow):
             QPushButton#mergeButton:hover {
                 background-color: #94e2d5;
             }
+            QPushButton#rotateButton {
+                padding: 4px;
+                font-size: 16px;
+            }
+            QLabel#fileRowName {
+                color: #cdd6f4;
+            }
         """)
 
-    def _get_file_list(self) -> list[str]:
-        """Return file paths in current widget order (for merge, after reorder)."""
-        paths = []
+    def _get_file_list(self) -> list[tuple[str, int]]:
+        """Return (path, rotation) tuples in current widget order."""
+        result = []
         for i in range(self.list_widget.count()):
-            path = self.list_widget.item(i).data(Qt.ItemDataRole.UserRole)
-            if path:
-                paths.append(path)
-        return paths
+            item = self.list_widget.item(i)
+            path = item.data(FILE_PATH_ROLE)
+            rotation = item.data(ROTATION_ROLE)
+            if path is not None:
+                result.append((path, rotation if isinstance(rotation, int) else 0))
+        return result
 
     def _add_file_item(self, path: str) -> None:
-        """Add a file to the list with its thumbnail preview."""
-        existing = self._get_file_list()
-        if path in existing:
+        """Add a file to the list with its thumbnail preview and rotate button."""
+        existing_paths = [p for p, _ in self._get_file_list()]
+        if path in existing_paths:
             return
-        item = QListWidgetItem(Path(path).name)
-        item.setData(Qt.ItemDataRole.UserRole, path)
-        thumb = create_file_thumbnail(path)
-        if thumb is not None:
-            item.setIcon(thumb)
+        item = QListWidgetItem()
+        item.setData(FILE_PATH_ROLE, path)
+        item.setData(ROTATION_ROLE, 0)
+        item.setSizeHint(QSize(400, THUMBNAIL_SIZE + 12))
+        thumb = create_file_thumbnail(path, 0)
+        row_widget = FileRowWidget(path, thumb)
+        row_widget.rotateClicked.connect(self._rotate_file)
         self.list_widget.addItem(item)
+        self.list_widget.setItemWidget(item, row_widget)
+
+    def _rotate_file(self, path: str) -> None:
+        """Rotate the given file 90° clockwise and update its thumbnail."""
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.data(FILE_PATH_ROLE) == path:
+                rotation = item.data(ROTATION_ROLE) or 0
+                rotation = (rotation + 90) % 360
+                item.setData(ROTATION_ROLE, rotation)
+                row_widget = self.list_widget.itemWidget(item)
+                if isinstance(row_widget, FileRowWidget):
+                    thumb = create_file_thumbnail(path, rotation)
+                    row_widget.update_thumbnail(thumb)
+                break
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -355,8 +428,10 @@ class PdfEditorApp(QMainWindow):
         if not name.lower().endswith(".pdf"):
             name += ".pdf"
         out_path = Path(folder) / name
+        paths = [Path(p) for p, _ in file_list]
+        rotations = [r for _, r in file_list]
         try:
-            merge_files_to_pdf([Path(p) for p in file_list], out_path)
+            merge_files_to_pdf(paths, out_path, rotations)
             QMessageBox.information(
                 self,
                 "Done",
