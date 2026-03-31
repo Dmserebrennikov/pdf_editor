@@ -4,7 +4,6 @@ Modern PySide6 interface.
 """
 from __future__ import annotations
 
-import io
 import sys
 from pathlib import Path
 
