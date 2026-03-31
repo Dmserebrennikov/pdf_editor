@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
 
-from .constants import PDF_EXTENSION
+from editor.constants import PDF_EXTENSION
 
 
 def split_pdf_to_individual_pages(

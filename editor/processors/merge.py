@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 
-from .constants import IMAGE_EXTENSIONS, PDF_EXTENSION
+from editor.constants import IMAGE_EXTENSIONS, PDF_EXTENSION
 
 
 def image_to_pdf_bytes(image_path: Path, rotation: int = 0) -> bytes:

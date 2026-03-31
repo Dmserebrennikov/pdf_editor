@@ -22,9 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from editor.constants import IMAGE_EXTENSIONS, PDF_EXTENSION
 from editor.processors import (
-    IMAGE_EXTENSIONS,
-    PDF_EXTENSION,
     merge_files_to_pdf,
     split_pdf_to_individual_pages,
 )

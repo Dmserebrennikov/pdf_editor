@@ -8,7 +8,7 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 
-from editor.processors import IMAGE_EXTENSIONS, PDF_EXTENSION
+from editor.constants import IMAGE_EXTENSIONS, PDF_EXTENSION
 
 THUMBNAIL_SIZE = 48
 
