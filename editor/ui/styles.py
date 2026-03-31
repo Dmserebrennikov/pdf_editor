@@ -2,6 +2,7 @@
 Application styles and theme configuration.
 Centralizes all Qt stylesheets and visual settings.
 """
+
 from __future__ import annotations
 
 from PySide6.QtGui import QFont
