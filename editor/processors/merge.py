@@ -1,21 +1,18 @@
 """PDF merge and image-to-PDF conversion logic."""
+
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
-from pypdf import PdfWriter, PdfReader
 from PIL import Image
-import io
+from pypdf import PdfReader, PdfWriter
 
-# Supported image extensions for conversion to PDF
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-PDF_EXTENSION = ".pdf"
+from .constants import IMAGE_EXTENSIONS, PDF_EXTENSION
 
 
 def image_to_pdf_bytes(image_path: Path, rotation: int = 0) -> bytes:
-    """Convert a single image file to a one-page PDF as bytes.
-    rotation: clockwise angle in degrees (0, 90, 180, 270).
-    """
+    """Convert a single image file to a one-page PDF as bytes."""
     img = Image.open(image_path)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -34,7 +31,6 @@ def merge_files_to_pdf(
 ) -> None:
     """
     Merge a list of PDF and/or image files (JPEG/PNG) into a single PDF.
-    Images are converted to PDF pages on the fly.
     rotations: optional list of clockwise angles (0, 90, 180, 270) per file.
     """
     if rotations is None:
@@ -59,5 +55,6 @@ def merge_files_to_pdf(
                 writer.add_page(page)
         else:
             raise ValueError(f"Unsupported file type: {path.name}")
+
     with open(output_path, "wb") as f:
         writer.write(f)

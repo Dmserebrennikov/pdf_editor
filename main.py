@@ -24,9 +24,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QImage
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QImage, QGuiApplication
 
-from pdf_merge import merge_files_to_pdf, IMAGE_EXTENSIONS, PDF_EXTENSION
+from editor.processors import (
+    merge_files_to_pdf,
+    split_pdf_to_individual_pages,
+    IMAGE_EXTENSIONS,
+    PDF_EXTENSION,
+)
 from styles import apply_app_style
 
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
@@ -143,8 +148,7 @@ class PdfEditorApp(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("PDF Editor — Join PDFs & Images")
-        self.setMinimumSize(520, 480)
-        self.resize(600, 520)
+        self.setMinimumSize(560, 620)
         self.setAcceptDrops(True)
 
         central = QWidget()
@@ -219,7 +223,65 @@ class PdfEditorApp(QMainWindow):
         self.btn_merge.clicked.connect(self._merge)
         layout.addWidget(self.btn_merge)
 
+        # Split section
+        split_group = QGroupBox("Split PDF into pages")
+        split_group.setObjectName("outputGroup")
+        split_layout = QVBoxLayout(split_group)
+        split_layout.setSpacing(12)
+
+        split_input_row = QHBoxLayout()
+        split_input_row.addWidget(QLabel("Input PDF:"))
+        self.split_input_edit = QLineEdit()
+        self.split_input_edit.setPlaceholderText("Select a PDF file to split…")
+        split_input_row.addWidget(self.split_input_edit)
+        self.btn_split_input_browse = QPushButton("Browse…")
+        self.btn_split_input_browse.clicked.connect(self._choose_split_input_pdf)
+        split_input_row.addWidget(self.btn_split_input_browse)
+        split_layout.addLayout(split_input_row)
+
+        split_folder_row = QHBoxLayout()
+        split_folder_row.addWidget(QLabel("Output folder:"))
+        self.split_folder_edit = QLineEdit()
+        self.split_folder_edit.setPlaceholderText("Select output folder…")
+        split_folder_row.addWidget(self.split_folder_edit)
+        self.btn_split_folder_browse = QPushButton("Browse…")
+        self.btn_split_folder_browse.clicked.connect(self._choose_split_output_folder)
+        split_folder_row.addWidget(self.btn_split_folder_browse)
+        split_layout.addLayout(split_folder_row)
+
+        split_prefix_row = QHBoxLayout()
+        split_prefix_row.addWidget(QLabel("File prefix:"))
+        self.split_prefix_edit = QLineEdit()
+        self.split_prefix_edit.setPlaceholderText("Optional (defaults to source file name)")
+        split_prefix_row.addWidget(self.split_prefix_edit)
+        split_layout.addLayout(split_prefix_row)
+
+        self.btn_split = QPushButton("Split PDF")
+        self.btn_split.setObjectName("primaryButton")
+        self.btn_split.setMinimumHeight(40)
+        self.btn_split.clicked.connect(self._split_pdf)
+        split_layout.addWidget(self.btn_split)
+
+        layout.addWidget(split_group)
+
         layout.addStretch()
+        self._apply_initial_window_size()
+
+    def _apply_initial_window_size(self) -> None:
+        """Set a taller default size while adapting to the current screen."""
+        hint = self.sizeHint()
+        desired_width = max(700, hint.width() + 40)
+        desired_height = max(760, hint.height() + 60)
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            max_width = int(available.width() * 0.9)
+            max_height = int(available.height() * 0.9)
+            desired_width = min(desired_width, max_width)
+            desired_height = min(desired_height, max_height)
+
+        self.resize(desired_width, desired_height)
 
     def _get_file_list(self) -> list[tuple[str, int]]:
         """Return (path, rotation) tuples in current widget order."""
@@ -297,6 +359,64 @@ class PdfEditorApp(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Select output folder")
         if path:
             self.folder_edit.setText(path)
+
+    def _choose_split_input_pdf(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select PDF file",
+            "",
+            "PDF files (*.pdf)",
+        )
+        if path:
+            self.split_input_edit.setText(path)
+
+    def _choose_split_output_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select output folder")
+        if path:
+            self.split_folder_edit.setText(path)
+
+    def _split_pdf(self) -> None:
+        input_pdf = self.split_input_edit.text().strip()
+        if not input_pdf:
+            QMessageBox.warning(
+                self,
+                "No input PDF",
+                "Choose a PDF file to split.",
+            )
+            return
+
+        output_folder = self.split_folder_edit.text().strip()
+        if not output_folder:
+            QMessageBox.warning(
+                self,
+                "No folder",
+                "Choose an output folder.",
+            )
+            return
+
+        prefix = self.split_prefix_edit.text().strip()
+
+        try:
+            created_files = split_pdf_to_individual_pages(
+                Path(input_pdf),
+                Path(output_folder),
+                prefix if prefix else None,
+            )
+            QMessageBox.information(
+                self,
+                "Done",
+                f"Created {len(created_files)} file(s) in:\n{output_folder}",
+            )
+        except FileNotFoundError as e:
+            QMessageBox.critical(self, "File error", str(e))
+        except ValueError as e:
+            QMessageBox.critical(self, "Error", str(e))
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Split failed:\n{e}",
+            )
 
     def _merge(self) -> None:
         file_list = self._get_file_list()
