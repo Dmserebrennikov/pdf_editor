@@ -23,7 +23,8 @@ def _thumbnail_for_image(path: Path, rotation: int = 0) -> QPixmap | None:
             img = img.rotate(-rotation, expand=True)
         img.thumbnail((THUMBNAIL_SIZE * 2, THUMBNAIL_SIZE * 2), Image.Resampling.LANCZOS)
         data = img.tobytes("raw", "RGB")
-        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+        bytes_per_line = img.width * 3
+        qimg = QImage(data, img.width, img.height, bytes_per_line, QImage.Format.Format_RGB888)
         return QPixmap.fromImage(qimg).scaled(
             THUMBNAIL_SIZE,
             THUMBNAIL_SIZE,
@@ -47,12 +48,21 @@ def _thumbnail_for_pdf(path: Path, rotation: int = 0) -> QPixmap | None:
         scale = THUMBNAIL_SIZE / max(page.rect.width, page.rect.height)
         mat = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img = Image.frombytes(
+            "RGB",
+            [pix.width, pix.height],
+            pix.samples,
+            "raw",
+            "RGB",
+            pix.stride,
+            1,
+        )
         doc.close()
         if rotation:
             img = img.rotate(-rotation, expand=True)
         data = img.tobytes("raw", "RGB")
-        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+        bytes_per_line = img.width * 3
+        qimg = QImage(data, img.width, img.height, bytes_per_line, QImage.Format.Format_RGB888)
         return QPixmap.fromImage(qimg).scaled(
             THUMBNAIL_SIZE,
             THUMBNAIL_SIZE,

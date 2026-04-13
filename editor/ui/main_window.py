@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QGuiApplication
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QGuiApplication, QImage, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -24,11 +25,16 @@ from PySide6.QtWidgets import (
 
 from editor.constants import IMAGE_EXTENSIONS, PDF_EXTENSION
 from editor.processors import (
+    compose_overlay_page_image,
+    create_overlay_pdf,
+    get_pdf_page_count,
     merge_files_to_pdf,
+    render_pdf_page_image,
     split_pdf_to_individual_pages,
 )
 from editor.ui.thumbnails import THUMBNAIL_SIZE, create_file_thumbnail
 from editor.ui.widgets.file_row import FileRowWidget
+from editor.ui.widgets.selection_preview import SelectionPreviewLabel
 
 ALLOWED_EXTENSIONS = tuple(IMAGE_EXTENSIONS | {PDF_EXTENSION})
 FILE_PATH_ROLE = Qt.ItemDataRole.UserRole
@@ -64,10 +70,12 @@ class PdfEditorWindow(QMainWindow):
         self.start_page = self._build_start_page()
         self.merge_page = self._build_merge_page()
         self.split_page = self._build_split_page()
+        self.frankenstein_page = self._build_frankenstein_page()
 
         self.stack.addWidget(self.start_page)
         self.stack.addWidget(self.merge_page)
         self.stack.addWidget(self.split_page)
+        self.stack.addWidget(self.frankenstein_page)
         self.stack.setCurrentWidget(self.start_page)
 
         self._apply_initial_window_size()
@@ -97,6 +105,12 @@ class PdfEditorWindow(QMainWindow):
         self.btn_go_split.setMinimumHeight(52)
         self.btn_go_split.clicked.connect(self._show_split_ui)
         layout.addWidget(self.btn_go_split)
+
+        self.btn_go_frankenstein = QPushButton("Frankenstein PDF")
+        self.btn_go_frankenstein.setObjectName("primaryButton")
+        self.btn_go_frankenstein.setMinimumHeight(52)
+        self.btn_go_frankenstein.clicked.connect(self._show_frankenstein_ui)
+        layout.addWidget(self.btn_go_frankenstein)
 
         layout.addStretch()
         return page
@@ -233,6 +247,153 @@ class PdfEditorWindow(QMainWindow):
         layout.addStretch()
         return page
 
+    def _build_frankenstein_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        self.btn_back_from_frankenstein = QPushButton("← Back")
+        self.btn_back_from_frankenstein.clicked.connect(self._show_start_menu)
+        header_row.addWidget(self.btn_back_from_frankenstein)
+        franken_title = QLabel("Frankenstein PDF")
+        franken_title.setObjectName("sectionLabel")
+        header_row.addWidget(franken_title)
+        header_row.addStretch()
+        layout.addLayout(header_row)
+
+        config_group = QGroupBox("Source pages")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(12)
+
+        row_a = QHBoxLayout()
+        row_a.addWidget(QLabel("Acceptor PDF:"))
+        self.franken_pdf_a_edit = QLineEdit()
+        self.franken_pdf_a_edit.setPlaceholderText("Select acceptor PDF...")
+        row_a.addWidget(self.franken_pdf_a_edit, 1)
+        self.btn_franken_pdf_a = QPushButton("Browse...")
+        self.btn_franken_pdf_a.clicked.connect(self._choose_franken_pdf_a)
+        row_a.addWidget(self.btn_franken_pdf_a)
+        row_a.addWidget(QLabel("Page:"))
+        self.franken_page_a_spin = QSpinBox()
+        self.franken_page_a_spin.setMinimum(1)
+        self.franken_page_a_spin.setMaximum(1)
+        self.franken_page_a_spin.valueChanged.connect(self._refresh_franken_preview_a)
+        row_a.addWidget(self.franken_page_a_spin)
+        config_layout.addLayout(row_a)
+
+        row_b = QHBoxLayout()
+        row_b.addWidget(QLabel("Donor PDF:"))
+        self.franken_pdf_b_edit = QLineEdit()
+        self.franken_pdf_b_edit.setPlaceholderText("Select donor PDF...")
+        row_b.addWidget(self.franken_pdf_b_edit, 1)
+        self.btn_franken_pdf_b = QPushButton("Browse...")
+        self.btn_franken_pdf_b.clicked.connect(self._choose_franken_pdf_b)
+        row_b.addWidget(self.btn_franken_pdf_b)
+        row_b.addWidget(QLabel("Page:"))
+        self.franken_page_b_spin = QSpinBox()
+        self.franken_page_b_spin.setMinimum(1)
+        self.franken_page_b_spin.setMaximum(1)
+        self.franken_page_b_spin.valueChanged.connect(self._refresh_franken_preview_b)
+        row_b.addWidget(self.franken_page_b_spin)
+        config_layout.addLayout(row_b)
+
+        layout.addWidget(config_group)
+
+        previews_row = QHBoxLayout()
+        previews_row.setSpacing(12)
+
+        panel_a = QVBoxLayout()
+        panel_a.addWidget(QLabel("Acceptor preview (with overlay result)"))
+        self.franken_preview_a = SelectionPreviewLabel(interactive=False)
+        self.franken_preview_a.setText("Load acceptor PDF")
+        panel_a.addWidget(self.franken_preview_a)
+        a_zoom_controls = QHBoxLayout()
+        self.btn_zoom_out_a = QPushButton("−")
+        self.btn_zoom_out_a.clicked.connect(self.franken_preview_a.zoom_out)
+        a_zoom_controls.addWidget(self.btn_zoom_out_a)
+        self.btn_zoom_in_a = QPushButton("+")
+        self.btn_zoom_in_a.clicked.connect(self.franken_preview_a.zoom_in)
+        a_zoom_controls.addWidget(self.btn_zoom_in_a)
+        self.btn_zoom_reset_a = QPushButton("Reset")
+        self.btn_zoom_reset_a.clicked.connect(self.franken_preview_a.reset_zoom)
+        a_zoom_controls.addWidget(self.btn_zoom_reset_a)
+        self.franken_zoom_a_label = QLabel("100%")
+        a_zoom_controls.addWidget(self.franken_zoom_a_label)
+        a_zoom_controls.addStretch()
+        panel_a.addLayout(a_zoom_controls)
+        self.franken_a_count_label = QLabel("Overlay preview updates automatically")
+        panel_a.addWidget(self.franken_a_count_label)
+        panel_a.addWidget(QLabel("Tip: wheel to zoom, drag to pan"))
+        self.franken_preview_a.zoom_changed.connect(self._update_franken_zoom_labels)
+
+        panel_b = QVBoxLayout()
+        panel_b.addWidget(QLabel("Select area on donor page"))
+        self.franken_preview_b = SelectionPreviewLabel(allow_multiple=True)
+        self.franken_preview_b.selection_changed.connect(self._update_franken_selection_stats)
+        panel_b.addWidget(self.franken_preview_b)
+        b_zoom_controls = QHBoxLayout()
+        self.btn_zoom_out_b = QPushButton("−")
+        self.btn_zoom_out_b.clicked.connect(self.franken_preview_b.zoom_out)
+        b_zoom_controls.addWidget(self.btn_zoom_out_b)
+        self.btn_zoom_in_b = QPushButton("+")
+        self.btn_zoom_in_b.clicked.connect(self.franken_preview_b.zoom_in)
+        b_zoom_controls.addWidget(self.btn_zoom_in_b)
+        self.btn_zoom_reset_b = QPushButton("Reset")
+        self.btn_zoom_reset_b.clicked.connect(self.franken_preview_b.reset_zoom)
+        b_zoom_controls.addWidget(self.btn_zoom_reset_b)
+        self.franken_zoom_b_label = QLabel("100%")
+        b_zoom_controls.addWidget(self.franken_zoom_b_label)
+        b_zoom_controls.addStretch()
+        panel_b.addLayout(b_zoom_controls)
+        b_controls = QHBoxLayout()
+        self.btn_clear_b = QPushButton("Clear donor area")
+        self.btn_clear_b.clicked.connect(self.franken_preview_b.clear_selections)
+        b_controls.addWidget(self.btn_clear_b)
+        self.franken_b_count_label = QLabel("0 selected")
+        b_controls.addWidget(self.franken_b_count_label)
+        b_controls.addStretch()
+        panel_b.addLayout(b_controls)
+        panel_b.addWidget(QLabel("Tip: wheel to zoom, right-drag or Shift+drag to pan"))
+        self.franken_preview_b.zoom_changed.connect(self._update_franken_zoom_labels)
+
+        previews_row.addLayout(panel_a, 1)
+        previews_row.addLayout(panel_b, 1)
+        layout.addLayout(previews_row)
+
+        output_group = QGroupBox("Output")
+        output_layout = QVBoxLayout(output_group)
+        output_layout.setSpacing(12)
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Folder:"))
+        self.franken_folder_edit = QLineEdit()
+        self.franken_folder_edit.setPlaceholderText("Select output folder...")
+        output_row.addWidget(self.franken_folder_edit)
+        self.btn_franken_folder = QPushButton("Browse...")
+        self.btn_franken_folder.clicked.connect(self._choose_franken_output_folder)
+        output_row.addWidget(self.btn_franken_folder)
+        output_layout.addLayout(output_row)
+
+        output_name_row = QHBoxLayout()
+        output_name_row.addWidget(QLabel("File name:"))
+        self.franken_name_edit = QLineEdit("frankenstein.pdf")
+        output_name_row.addWidget(self.franken_name_edit)
+        output_layout.addLayout(output_name_row)
+        layout.addWidget(output_group)
+
+        self.btn_create_frankenstein = QPushButton("Create Overlay PDF")
+        self.btn_create_frankenstein.setObjectName("mergeButton")
+        self.btn_create_frankenstein.setMinimumHeight(42)
+        self.btn_create_frankenstein.clicked.connect(self._create_frankenstein_pdf)
+        layout.addWidget(self.btn_create_frankenstein)
+
+        self._franken_base_image = None
+        self._franken_donor_image = None
+        self._update_franken_zoom_labels()
+
+        layout.addStretch()
+        return page
+
     def _show_start_menu(self) -> None:
         self.stack.setCurrentWidget(self.start_page)
 
@@ -242,17 +403,153 @@ class PdfEditorWindow(QMainWindow):
     def _show_split_ui(self) -> None:
         self.stack.setCurrentWidget(self.split_page)
 
+    def _show_frankenstein_ui(self) -> None:
+        self.stack.setCurrentWidget(self.frankenstein_page)
+
+    @staticmethod
+    def _pil_to_qpixmap(image) -> QPixmap:
+        rgb = image.convert("RGB")
+        data = rgb.tobytes("raw", "RGB")
+        bytes_per_line = rgb.width * 3
+        qimg = QImage(data, rgb.width, rgb.height, bytes_per_line, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy())
+
+    def _choose_franken_pdf_a(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select acceptor PDF", "", "PDF files (*.pdf)")
+        if not path:
+            return
+        self.franken_pdf_a_edit.setText(path)
+        try:
+            page_count = get_pdf_page_count(Path(path))
+            self.franken_page_a_spin.setMaximum(max(1, page_count))
+            self.franken_page_a_spin.setValue(1)
+            self._refresh_franken_preview_a()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Unable to load acceptor PDF:\n{e}")
+
+    def _choose_franken_pdf_b(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select donor PDF", "", "PDF files (*.pdf)")
+        if not path:
+            return
+        self.franken_pdf_b_edit.setText(path)
+        try:
+            page_count = get_pdf_page_count(Path(path))
+            self.franken_page_b_spin.setMaximum(max(1, page_count))
+            self.franken_page_b_spin.setValue(1)
+            self._refresh_franken_preview_b()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Unable to load donor PDF:\n{e}")
+
+    def _refresh_franken_preview_a(self, *_args) -> None:
+        path = self.franken_pdf_a_edit.text().strip()
+        if not path:
+            self.franken_preview_a.set_preview_pixmap(None)
+            self.franken_preview_a.setText("Load acceptor PDF")
+            self._franken_base_image = None
+            return
+        try:
+            image = render_pdf_page_image(Path(path), self.franken_page_a_spin.value() - 1, dpi=110)
+            self._franken_base_image = image
+            self._update_franken_overlay_preview()
+        except Exception:
+            self._franken_base_image = None
+            self.franken_preview_a.set_preview_pixmap(None)
+            self.franken_preview_a.setText("Unable to render acceptor preview")
+
+    def _refresh_franken_preview_b(self, *_args) -> None:
+        path = self.franken_pdf_b_edit.text().strip()
+        if not path:
+            self.franken_preview_b.set_preview_pixmap(None)
+            self._franken_donor_image = None
+            self._update_franken_overlay_preview()
+            return
+        try:
+            image = render_pdf_page_image(Path(path), self.franken_page_b_spin.value() - 1, dpi=110)
+            self._franken_donor_image = image
+            self.franken_preview_b.set_preview_pixmap(self._pil_to_qpixmap(image))
+            self._update_franken_overlay_preview()
+        except Exception:
+            self._franken_donor_image = None
+            self.franken_preview_b.set_preview_pixmap(None)
+            self._update_franken_overlay_preview()
+
+    def _update_franken_selection_stats(self) -> None:
+        count_b = len(self.franken_preview_b.get_normalized_rectangles())
+        self.franken_b_count_label.setText(f"{count_b} selected")
+        self._update_franken_overlay_preview()
+
+    def _update_franken_zoom_labels(self, *_args) -> None:
+        self.franken_zoom_a_label.setText(f"{int(round(self.franken_preview_a.get_zoom_factor() * 100))}%")
+        self.franken_zoom_b_label.setText(f"{int(round(self.franken_preview_b.get_zoom_factor() * 100))}%")
+
+    def _update_franken_overlay_preview(self) -> None:
+        if self._franken_base_image is None:
+            return
+        result = self._franken_base_image
+        donor_rectangles = self.franken_preview_b.get_normalized_rectangles()
+        if self._franken_donor_image is not None and donor_rectangles:
+            try:
+                result = compose_overlay_page_image(
+                    self._franken_base_image,
+                    self._franken_donor_image,
+                    donor_rectangles,
+                )
+            except Exception:
+                pass
+
+        self.franken_preview_a.set_preview_pixmap(self._pil_to_qpixmap(result))
+
+    def _choose_franken_output_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select output folder")
+        if path:
+            self.franken_folder_edit.setText(path)
+
+    def _create_frankenstein_pdf(self) -> None:
+        pdf_a = self.franken_pdf_a_edit.text().strip()
+        pdf_b = self.franken_pdf_b_edit.text().strip()
+        output_folder = self.franken_folder_edit.text().strip()
+        output_name = self.franken_name_edit.text().strip()
+        if not pdf_a or not pdf_b:
+            QMessageBox.warning(self, "Missing input", "Choose both acceptor and donor PDFs.")
+            return
+        if not output_folder:
+            QMessageBox.warning(self, "No folder", "Choose an output folder.")
+            return
+        if not output_name:
+            QMessageBox.warning(self, "No file name", "Enter an output file name.")
+            return
+        if not output_name.lower().endswith(".pdf"):
+            output_name += ".pdf"
+
+        rectangles_b = self.franken_preview_b.get_normalized_rectangles()
+        if not rectangles_b:
+            QMessageBox.warning(self, "No donor area", "Select an area on the donor preview.")
+            return
+        try:
+            out_path = Path(output_folder) / output_name
+            create_overlay_pdf(
+                Path(pdf_a),
+                self.franken_page_a_spin.value() - 1,
+                Path(pdf_b),
+                self.franken_page_b_spin.value() - 1,
+                rectangles_b,
+                out_path,
+            )
+            QMessageBox.information(self, "Done", f"Saved overlay PDF to:\n{out_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create overlay PDF:\n{e}")
+
     def _apply_initial_window_size(self) -> None:
         """Set a taller default size while adapting to the current screen."""
         hint = self.sizeHint()
-        desired_width = max(700, hint.width() + 40)
-        desired_height = max(760, hint.height() + 60)
+        desired_width = max(1200, hint.width() + 160)
+        desired_height = max(900, hint.height() + 120)
 
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             available = screen.availableGeometry()
-            max_width = int(available.width() * 0.9)
-            max_height = int(available.height() * 0.9)
+            max_width = int(available.width() * 0.97)
+            max_height = int(available.height() * 0.95)
             desired_width = min(desired_width, max_width)
             desired_height = min(desired_height, max_height)
 
